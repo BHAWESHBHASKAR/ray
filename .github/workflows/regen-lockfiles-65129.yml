@@ -1,0 +1,70 @@
+name: Regenerate lock files for 65129
+
+# Helper workflow for the fork only. It mirrors dependabot_recompile_deps.yml
+# and the Buildkite "pip-compile dependencies" job, then pushes the regenerated
+# files to a separate result branch.
+
+on:
+  push:
+    branches:
+      - "regen-lockfiles-65129"
+
+permissions:
+  contents: write
+
+jobs:
+  regen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/0.9.26/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install bazelisk
+        run: |
+          if ! command -v bazelisk >/dev/null 2>&1; then
+            sudo curl -fsSL -o /usr/local/bin/bazelisk \
+              https://github.com/bazelbuild/bazelisk/releases/download/v1.26.0/bazelisk-linux-amd64
+            sudo chmod +x /usr/local/bin/bazelisk
+          fi
+          bazelisk version
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Recompile requirements_compiled.txt
+        run: |
+          python -m venv /tmp/pip-compile-venv
+          source /tmp/pip-compile-venv/bin/activate
+          ./ci/ci.sh compile_pip_dependencies
+
+      - name: Recompile requirements_compiled_py3.14.txt
+        run: |
+          source /tmp/pip-compile-venv/bin/activate
+          ./ci/ci.sh compile_pip_dependencies_py314
+
+      - name: Recompile raydepsets lock files
+        run: bazelisk run //ci/raydepsets:raydepsets -- build --all-configs
+
+      - name: Check lock files
+        run: bazelisk run //ci/raydepsets:raydepsets -- build --all-configs --check
+
+      - name: Show changes
+        run: |
+          git status --short
+          git diff --stat
+
+      - name: Push result branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "Regenerated dependency lock files"
+          git push origin HEAD:refs/heads/regen-lockfiles-65129-result
